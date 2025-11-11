@@ -132,6 +132,6 @@ class Cangjie < Formula
     File.open("test.cj", "w") do |f|
       f.puts 'main() {println("Hello world!")}'
     end
-    system "bash", "-c", "source #{prefix}/output/envsetup.sh && cjc test.cj && ./main"
+    assert_match "Hello world!", shell_output("source #{prefix}/output/envsetup.sh && cjc test.cj && ./main")
   end
 end
