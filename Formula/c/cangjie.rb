@@ -44,8 +44,8 @@ class Cangjie < Formula
   end
 
   def install
-    arch = Hardware::CPU.arm? ? "arm64" : "x86_64"
-    sdk_name="mac-#{ENV["ARCH_NAME"]}"
+    arch = Hardware::CPU.arm? ? "aarch64" : "x86_64"
+    sdk_name = Hardware::CPU.arm? ? "mac-aarch64" : "mac-x64"
     cangjie_version="1.5.0"
     stdx_version="1.5.0.1"
     ENV["ARCH"] = arch
@@ -54,18 +54,16 @@ class Cangjie < Formula
     ENV["STDX_VERSION"] = stdx_version
 
     ENV.prepend_path "PATH", Formula["llvm@16"].opt_bin
-    ENV["CC"] = Formula["llvm@16"].opt_bin/"clang"
-    ENV["CXX"] = Formula["llvm@16"].opt_bin/"clang++"
     ENV.prepend_path "PATH", Formula["m4"].opt_bin
     openssl_path=Formula["openssl@3"].opt_lib
     ENV["OPENSSL_PATH"] = openssl_path
-    ENV.prepend_path "LD_LIBRARY_PATH", Formula["openssl@3"].opt_lib
+    ENV.prepend_path "LD_LIBRARY_PATH", openssl_path
 
     workspace=Dir.pwd
     resource("cangjie_compiler").stage buildpath/"cangjie_compiler"
     resource("cangjie_runtime").stage buildpath/"cangjie_runtime"
     resource("cangjie_tools").stage buildpath/"cangjie_tools"
-    resource("cangjie_stdx").stage buildpath/"cangjie_stdx "
+    resource("cangjie_stdx").stage buildpath/"cangjie_stdx"
 
     # --- compiler ---
     Dir.chdir("#{workspace}/cangjie_compiler")
@@ -74,9 +72,12 @@ class Cangjie < Formula
     system "git", "remote", "add", "compiler_fix", "https://gitcode.com/claudio_/cangjie_compiler.git"
     system "git", "fetch", "compiler_fix"
     system "git", "cherry-pick", "092bef1a02f066ff2786d12f04a16063b30cca3d"
+    system "git", "cherry-pick", "890edb3ba3df893d879549c3d82ea9d9d620416b"
 
     system "python3", "build.py", "clean"
-    system "python3", "build.py", "build", "-t", "release", "--no-tests", "--build-cjdb"
+    # TODO: build with --build-cjdb
+    # system "python3", "build.py", "build", "-t", "release", "--no-tests", "--build-cjdb"
+    system "python3", "build.py", "build", "-t", "release", "--no-tests"
     system "python3", "build.py", "install"
 
     # --- runtime ---
@@ -86,39 +87,51 @@ class Cangjie < Formula
     system "git", "remote", "add", "runtime_fix", "https://gitcode.com/magnusmorton/cangjie_runtime.git"
     system "git", "fetch", "runtime_fix"
     system "git", "cherry-pick", "6fdd41f22576345e45c4c7b507d55593d556ed81"
+    system "git", "remote", "add", "runtime_fix_2", "https://gitcode.com/claudio_/cangjie_runtime.git"
+    system "git", "fetch", "runtime_fix_2"
+    system "git", "cherry-pick", "754b3aa9575626a56b46a400dd7c013430028895"
 
     system "python3", "build.py", "clean"
     system "python3", "build.py", "build", "-t", "release", "-v", "#{cangjie_version}"
     system "python3", "build.py", "install"
-    cp_r "#{workspace}/cangjie_runtime/runtime/output/common/darwin_release_#{arch}/lib" "#{workspace}/cangjie_compiler/output"
-    cp_r "#{workspace}/cangjie_runtime/runtime/output/common/darwin_release_#{arch}/runtime" "#{workspace}/cangjie_compiler/output"
+    cp_r "#{workspace}/cangjie_runtime/runtime/output/common/darwin_release_#{arch}/lib", "#{workspace}/cangjie_compiler/output"
+    cp_r "#{workspace}/cangjie_runtime/runtime/output/common/darwin_release_#{arch}/runtime", "#{workspace}/cangjie_compiler/output"
 
     # --- std ---
     Dir.chdir("#{workspace}/cangjie_runtime/stdlib")
     system "python3",  "build.py", "clean"
-    system "python3",  "build.py", "build", "-t", "release", "--target-lib=#{workspace}/cangjie_runtime/runtime/output", "--target-lib=#{openssl_path}"
+    system "bash", "-c", "source #{workspace}/cangjie_compiler/output/envsetup.sh && python3 build.py build -t release --target-lib=#{workspace}/cangjie_runtime/runtime/output --target-lib=#{openssl_path}"
     system "python3",  "build.py", "install"
-    cp_r "#{workspace}/cangjie_runtime/std/output/*" "#{workspace}/cangjie_compiler/output/"
+    cp_r Dir.glob("#{workspace}/cangjie_runtime/stdlib/output/*"), "#{workspace}/cangjie_compiler/output/"
 
     # --- stdx ---
     Dir.chdir("#{workspace}/cangjie_stdx")
     system "python3", "build.py", "clean"
-    system "python3", "build.py", "build", "-t", "release", "--include=#{workspace}/cangjie_compiler/include", "--target-lib=#{openssl_path}"
+    system "bash", "-c", "source #{workspace}/cangjie_compiler/output/envsetup.sh && python3 build.py build -t release --include=#{workspace}/cangjie_compiler/include --target-lib=#{openssl_path}"
     system "python3", "build.py", "install"
-    # TODO: can we set this in the system?
-    ENV["CANGJIE_STDX_PATH"]="#{workspace}/cangjie_stdx/target/darwin_${ARCH}_cjnative/static/stdx"
+
+    # Add CANGJIE_STDX_PATH to the envsetup.h so that stdx is also visible to the user
+    File.open("#{workspace}/cangjie_compiler/output/envsetup.sh", "a") do |f|
+      f.puts "export CANGJIE_STDX_PATH=#{workspace}/cangjie_stdx/target/darwin_${ARCH}_cjnative/static/stdx"
+    end
+
+    prefix.install "#{workspace}/cangjie_compiler/output"
+  end
+
+  def caveats
+    <<~EOS
+      To use Cangjie, you need to set up your environment:
+
+        source #{prefix}/output/envsetup.sh
+
+      You can add this to your ~/.bashrc or ~/.zshrc.
+    EOS
   end
 
   test do
-    # `test do` will create, run in and delete a temporary directory.
-    #
-    # This test will fail and we won't accept that! For Homebrew/homebrew-core
-    # this will need to be a test that verifies the functionality of the
-    # software. Run the test with `brew test cangjie`. Options passed
-    # to `brew install` such as `--HEAD` also need to be provided to `brew test`.
-    #
-    # The installed folder is not in the path, so use the entire path to any
-    # executables being tested: `system bin/"program", "do", "something"`.
-    system "false"
+    File.open("test.cj", "w") do |f|
+      f.puts 'main() {println("Hello world!")}'
+    end
+    system "bash", "-c", "source #{prefix}/output/envsetup.sh && cjc test.cj && ./main"
   end
 end
